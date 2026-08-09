@@ -14,6 +14,7 @@ import {
   useState,
 } from "react";
 import type {
+  EmptyMessagePartProps,
   FileMessagePartProps,
   ImageMessagePartProps,
   ReasoningMessagePartProps,
@@ -119,7 +120,9 @@ import { showErrorNotification, showSuccessNotification } from "@homarr/notifica
 import { useScopedI18n } from "@homarr/translation/client";
 
 import classes from "./assistant-panel.module.css";
+import { getAssistantActivityState } from "./assistant-activity-state";
 import { useAssistantAutoApproval, useAssistantAutomaticAction } from "./assistant-auto-approval";
+import { AssistantDotMatrix } from "./assistant-dot-matrix";
 import { getAssistantDirectiveTranslationKey, parseAssistantDirectives } from "./assistant-directives";
 import { remarkAssistantDirectives, resolveAssistantDirectiveEntity } from "./assistant-markdown-directives";
 import type { AssistantDirectiveEntity } from "./assistant-markdown-directives";
@@ -160,6 +163,7 @@ interface AssistantPanelProps extends AssistantConversationControls {
   isRunning: boolean;
   unreadCount: number;
   latestAssistantText: string;
+  latestAssistantPartType: string | undefined;
   latestUserText: string;
   latestStatus: MessageStatus | undefined;
   pendingAction: AssistantPendingAction | undefined;
@@ -527,10 +531,23 @@ const ReasoningPart = (_props: ReasoningMessagePartProps) => (
       remarkPlugins={markdownRemarkPlugins}
       components={assistantMarkdownComponents}
       componentsByLanguage={{ mermaid: { SyntaxHighlighter: MermaidDiagram } }}
-      defer
     />
   </AssistantDirectiveEntitiesContext.Provider>
 );
+
+const AssistantMessagePending = ({ status }: EmptyMessagePartProps) => {
+  const t = useScopedI18n("common.assistant");
+  if (status.type !== "running") return null;
+
+  return (
+    <Group component="output" className={classes.messagePending} gap="xs" wrap="nowrap" aria-live="polite">
+      <AssistantDotMatrix state="thinking" role="presentation" aria-hidden />
+      <Text size="xs" fw={600} c="dimmed">
+        {t("activity.thinking")}
+      </Text>
+    </Group>
+  );
+};
 
 const ReasoningVisibilityContext = createContext<{
   collapsed: boolean;
@@ -970,7 +987,9 @@ const AssistantChainOfThought = () => {
           onClick={() => setPreferredCollapsed(!collapsed)}
         >
           <Group gap="xs" wrap="nowrap">
-            {running && <Loader type="bars" size="xs" color="gray" />}
+            {(running || chainStatus.type === "requires-action") && (
+              <AssistantDotMatrix state={running ? "thinking" : "waiting"} role="presentation" aria-hidden />
+            )}
             <Text size="xs" fw={650} c="dimmed">
               {t("reasoning")}
             </Text>
@@ -1527,7 +1546,7 @@ const ConversationContext = () => {
     ? Math.min(100, Math.round(((usage.contextUsed ?? 0) / Math.max(usage.contextLength ?? 1, 1)) * 100))
     : 0;
   const quickLabel = [
-    hasTokenUsage ? `${usage.totalTokens.toLocaleString()} ${t("usage.tokens")}` : t("usage.notReported"),
+    hasTokenUsage ? `${usage.totalTokens.toLocaleString()} ${t("usage.tokens")}` : undefined,
     hasCost ? formatCost(usage.cost) : undefined,
   ]
     .filter(Boolean)
@@ -1548,9 +1567,10 @@ const ConversationContext = () => {
         <UnstyledButton
           className={classes.composerContext}
           type="button"
-          aria-label={`${t("usage.contextWindow")}: ${quickLabel}`}
+          aria-label={quickLabel ? `${t("usage.contextWindow")}: ${quickLabel}` : t("usage.contextWindow")}
           aria-expanded={opened}
           aria-haspopup="dialog"
+          data-compact={!quickLabel || undefined}
           onClick={() => setOpened((value) => !value)}
         >
           <RingProgress
@@ -1559,9 +1579,11 @@ const ConversationContext = () => {
             roundCaps
             sections={hasContext ? [{ value: contextPercentage, color: getContextColor(contextPercentage) }] : []}
           />
-          <Text size="xs" fw={650} truncate>
-            {quickLabel}
-          </Text>
+          {quickLabel && (
+            <Text size="xs" fw={650} truncate>
+              {quickLabel}
+            </Text>
+          )}
         </UnstyledButton>
       </Popover.Target>
       <Popover.Dropdown className={classes.conversationContextPopover}>
@@ -1733,7 +1755,9 @@ const WebSearchActivity = () => {
 const AssistantMessage = () => (
   <MessagePrimitive.Root className={`${classes.message} ${classes.assistantMessage}`}>
     <MessagePrimitive.Parts
+      unstable_showEmptyOnNonTextEnd={false}
       components={{
+        Empty: AssistantMessagePending,
         Text: AssistantTextPart,
         Source: SourcePart,
         File: FilePart,
@@ -2487,6 +2511,7 @@ const AssistantActivityBar = ({
   isRunning,
   unreadCount,
   latestAssistantText,
+  latestAssistantPartType,
   latestUserText,
   latestStatus,
   pendingAction,
@@ -2498,6 +2523,7 @@ const AssistantActivityBar = ({
   | "isRunning"
   | "unreadCount"
   | "latestAssistantText"
+  | "latestAssistantPartType"
   | "latestUserText"
   | "latestStatus"
   | "pendingAction"
@@ -2527,26 +2553,21 @@ const AssistantActivityBar = ({
   const detail = isRunning
     ? latestUserText || t("activity.working")
     : pendingCopy?.detail || latestAssistantText || (failed ? t("responseError.description") : t("activity.completed"));
+  const activityState = getAssistantActivityState({
+    isRunning,
+    latestPartType: latestAssistantPartType,
+    needsApproval,
+    failed,
+  });
+  const activityColor = needsApproval ? "yellow" : failed ? "red" : isRunning ? "red" : "green";
 
   return (
     <Box component="output" className={classes.activityBar} aria-live="polite">
       <UnstyledButton className={classes.activityTrigger} onClick={onOpen} aria-label={t("activity.expand")}>
         <Group gap="sm" wrap="nowrap">
-          {isRunning ? (
-            <ThemeIcon variant="light" color="red" radius="xl">
-              <Loader type="bars" size="sm" color="red" />
-            </ThemeIcon>
-          ) : (
-            <ThemeIcon variant="light" color={failed ? "red" : needsApproval ? "yellow" : "green"} radius="xl">
-              {failed ? (
-                <IconAlertTriangle size={17} />
-              ) : needsApproval ? (
-                <IconRobot size={17} />
-              ) : (
-                <IconCheck size={17} />
-              )}
-            </ThemeIcon>
-          )}
+          <ThemeIcon variant="light" color={activityColor} radius="xl">
+            <AssistantDotMatrix state={activityState} label={title} role="presentation" aria-hidden />
+          </ThemeIcon>
           <Stack gap={0} className={classes.activityCopy}>
             <Group gap="xs" wrap="nowrap">
               <Text size="sm" fw={700}>
@@ -2737,6 +2758,7 @@ export const AssistantPanel = ({
   isRunning,
   unreadCount,
   latestAssistantText,
+  latestAssistantPartType,
   latestUserText,
   latestStatus,
   pendingAction,
@@ -2783,6 +2805,7 @@ export const AssistantPanel = ({
           isRunning={isRunning}
           unreadCount={unreadCount}
           latestAssistantText={latestAssistantText}
+          latestAssistantPartType={latestAssistantPartType}
           latestUserText={latestUserText}
           latestStatus={latestStatus}
           pendingAction={pendingAction}
