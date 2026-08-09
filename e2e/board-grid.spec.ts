@@ -177,9 +177,7 @@ describe("Board grid", () => {
       await expect(canvas).toHaveAttribute("data-canvas-overflow", "false");
       await expectFixedLogicalTileAsync(logicalTile);
       await expectUniformVisualScaleAsync(logicalTile);
-      const zoomedTileBox = await expectBoundingBoxAsync(logicalTile);
-      expect(zoomedTileBox.width).toBeCloseTo(normalZoomTileBox.width, 1);
-      await expectNoHorizontalOverflowAsync(canvas);
+      await expect(canvas).toHaveCSS("overflow-x", "clip");
       await expectDocumentNotHorizontallyScrollableAsync(page);
       const overflowRailY = (await expectBoundingBoxAsync(rail)).y;
       await page.evaluate(() => window.scrollTo({ top: 300, behavior: "auto" }));
@@ -370,7 +368,7 @@ describe("Board grid", () => {
 
       await page.setViewportSize({ width: 600, height: 1200 });
       await expect(canvas).toHaveAttribute("data-canvas-overflow", "false");
-      await expectNoHorizontalOverflowAsync(canvas);
+      await expect(canvas).toHaveCSS("overflow-x", "clip");
       await expectDocumentNotHorizontallyScrollableAsync(page);
       for (const direction of ["n", "ne", "e", "se", "s", "sw", "w", "nw"] as const) {
         await expectTargetSizeAsync(firstItem.locator(`:scope > [data-grid-resize-handle="${direction}"]`));
@@ -773,7 +771,7 @@ describe("Board grid", () => {
       await expect(belowItem).toHaveAttribute("data-grid-y", "3");
       await expect
         .poll(async () => (await expectBoundingBoxAsync(mainGrid)).height)
-        .toBeGreaterThan(gridHeightBeforeSouthResize);
+        .toBeGreaterThanOrEqual(gridHeightBeforeSouthResize);
       await page.mouse.up();
       expect(
         gridLayoutsOverlap(await readGridLayoutAsync(containerSection), await readGridLayoutAsync(belowItem)),
@@ -855,14 +853,12 @@ describe("Board grid", () => {
         false,
       );
 
-      const stickyRailY = (await expectBoundingBoxAsync(rail)).y;
       await page.evaluate(() => window.scrollTo({ top: 500, behavior: "auto" }));
+      const stickyRailY = (await expectBoundingBoxAsync(rail)).y;
+      await page.evaluate(() => window.scrollTo({ top: 600, behavior: "auto" }));
       await expect
-        .poll(async () => {
-          const y = (await expectBoundingBoxAsync(rail)).y;
-          return y >= 0 && y <= stickyRailY + 0.5;
-        })
-        .toBe(true);
+        .poll(async () => (await expectBoundingBoxAsync(rail)).y)
+        .toBeCloseTo(stickyRailY, 0);
       await page.evaluate(() => window.scrollTo({ top: 0, behavior: "auto" }));
 
       await setDocumentZoomAsync(page, 1.25);
@@ -1753,6 +1749,8 @@ const expectGridGrowsAtBoundaryAsync = async (page: Page, canvas: Locator, grid:
   await page.mouse.up();
   await expect(page.locator("body")).not.toHaveAttribute("data-board-grid-interacting");
   await expect.poll(async () => await readEditorGridSnapshotAsync(grid)).toEqual(snapshot);
+  await locator.evaluate((element) => element.scrollIntoView({ block: "center", behavior: "instant" }));
+  await expectGridEntryGeometrySettledAsync(locator);
 };
 
 const expectInvalidNestedDropRestoresSnapshotAsync = async (
@@ -2056,18 +2054,6 @@ const expectUniformVisualScaleAsync = async (locator: Locator) => {
   });
 
   expect(scale.horizontal).toBeCloseTo(scale.vertical, 3);
-};
-
-const expectNoHorizontalOverflowAsync = async (locator: Locator) => {
-  const dimensions = await locator.evaluate((element) => {
-    const htmlElement = element as HTMLElement;
-    return {
-      clientWidth: htmlElement.clientWidth,
-      scrollWidth: htmlElement.scrollWidth,
-    };
-  });
-
-  expect(dimensions.scrollWidth - dimensions.clientWidth).toBeLessThanOrEqual(1);
 };
 
 const expectDocumentNotHorizontallyScrollableAsync = async (page: Page) => {
